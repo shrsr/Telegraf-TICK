@@ -1,0 +1,126 @@
+---
+- name: TICK-Telemetry
+  hosts: leaf
+  gather_facts: no
+  tasks:
+
+    - name: Delete Telemetry Configuration
+      nxos_telemetry:
+        state: deleted
+    - name: Merge Telemetry Configuration
+      nxos_telemetry:
+        config:
+            certificate:
+              key: /bootflash/server.key
+              hostname: localhost
+            compression: gzip
+            #source_interface: Ethernet1/1
+            vrf: management
+            destination_groups:
+              - id: 2
+                destination:
+                  ip: "{{ ip }}"
+                  port: 57000
+                  protocol: gRPC
+                  encoding: GPB
+            sensor_groups:
+              - id: 1
+                data_source: NX-API
+                path:
+                  name: '"show ptp corrections entries 5"'
+            subscriptions:
+              - id: 6
+                destination_group: 2
+                sensor_group:
+                  id: 1
+                  sample_interval: 2000
+        state: merged
+
+- name: run
+  hosts: localhost
+  gather_facts: no
+  tasks:
+
+    - name: install telegraf
+      yum: name=https://dl.influxdata.com/telegraf/releases/telegraf-1.13.0-0.rc2.x86_64.rpm
+    - name: install influxdb
+      yum: name=https://dl.influxdata.com/influxdb/releases/influxdb-1.7.9.x86_64.rpm
+
+    - name: install chronograf
+      yum: name=https://dl.influxdata.com/chronograf/releases/chronograf-1.7.14.x86_64.rpm
+
+    - name: install kapacitor
+      yum: name=https://dl.influxdata.com/kapacitor/releases/kapacitor-1.5.3.x86_64.rpm
+
+
+    - name: configure telegraf
+      copy:
+       dest: "/etc/telegraf/telegraf.conf"
+       content: |
+        [[inputs.cisco_telemetry_mdt]]
+        transport = "grpc"
+        service_address = "{{ ip }}:57000"
+        [[outputs.influxdb]]
+        urls = ["http://{{ ip }}:8086"]
+        database = "Ansible"
+
+    - name: configure influxdb
+      copy:
+       dest: "/etc/influxdb/influxdb.conf"
+       content: |
+        [meta]
+        dir = "/var/lib/influxdb/meta"
+
+        [data]
+        dir = "/var/lib/influxdb/data"
+        engine = "tsm1"
+        wal-dir = "/var/lib/influxdb/wal"
+        max-values-per-tag = 0 # Disable limit for values-per-tag to support huge tables like MAC address table
+
+        [http]
+        flux-enabled = true
+
+    - name: stop chronograf
+      command: pkill chronograf
+      ignore_errors: yes
+
+    - name: stop kapacitor
+      command: pkill kapacitor
+      ignore_errors: yes
+
+    - name: stop telegraf
+      command: pkill telegraf
+      ignore_errors: yes
+
+    - name: stop influxdb
+      command: pkill influxd
+      ignore_errors: yes
+
+    - name: run influxdb
+      at:
+        command: /usr/bin/influxd -config /etc/influxdb/influxdb.conf
+        count: 1
+        units: minutes
+
+
+    - name: run telegraf
+      at:
+       command: telegraf
+       count: 1
+       units: minutes
+
+
+    - name: run kapacitor
+      at:
+        command: kapacitord
+        count: 1
+        units: minutes
+
+    
+    - name: run chronograf
+      at:
+       command: chronograf
+       count: 1
+       units: minutes
+
+
